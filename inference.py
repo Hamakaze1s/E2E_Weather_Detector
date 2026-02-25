@@ -98,10 +98,20 @@ def load_restoration(ckpt_path: str, device: torch.device) -> HistoformerRestora
     )
     model = HistoformerRestoration(cfg).to(device).eval()
     ckpt  = torch.load(ckpt_path, map_location="cpu", weights_only=False)
-    state = ckpt.get("model_state_dict", ckpt.get("state_dict", ckpt))
+    # Checkpoint is saved as {'model': OrderedDict(...), 'epoch': N}
+    # Mirror the original load_state_dict_flexible: try each key with 'or' chain
+    state = (
+        ckpt.get("ema")
+        or ckpt.get("model_state_dict")
+        or ckpt.get("state_dict")
+        or ckpt.get("model")
+        or ckpt
+    )
     # Strip any "restoration." prefix if saved from E2EWeatherModel
     state = {k.replace("restoration.", "", 1): v for k, v in state.items()}
-    model.load_state_dict(state, strict=False)
+    missing, unexpected = model.load_state_dict(state, strict=False)
+    if missing:
+        print(f"[!] Restoration: {len(missing)} missing keys — checkpoint may not match model config")
     print(f"[✓] Restoration checkpoint loaded: {ckpt_path}")
     return model
 
