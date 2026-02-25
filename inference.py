@@ -50,17 +50,13 @@ SUPPORTED = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".webp"}
 
 def load_image(path: Path, size: int = 640) -> tuple[torch.Tensor, np.ndarray]:
     """Read an image and return (tensor [1,3,H,W] ∈[0,1], original_bgr_ndarray)."""
-    bgr  = cv2.imread(str(path))
+    bgr = cv2.imread(str(path))
     if bgr is None:
         raise FileNotFoundError(f"Cannot read image: {path}")
-    rgb  = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-    h, w = rgb.shape[:2]
-    # Pad to square, then resize
-    side = max(h, w)
-    canvas = np.zeros((side, side, 3), dtype=np.uint8)
-    canvas[:h, :w] = rgb
-    canvas = cv2.resize(canvas, (size, size), interpolation=cv2.INTER_LINEAR)
-    tensor = torch.from_numpy(canvas).permute(2, 0, 1).float() / 255.0
+    rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+    # Direct resize to square — no letterbox padding, so output has no black bars.
+    resized = cv2.resize(rgb, (size, size), interpolation=cv2.INTER_LINEAR)
+    tensor = torch.from_numpy(resized).permute(2, 0, 1).float() / 255.0
     return tensor.unsqueeze(0), bgr
 
 
@@ -70,15 +66,23 @@ def tensor_to_cv2(t: torch.Tensor) -> np.ndarray:
     return cv2.cvtColor((arr * 255).astype(np.uint8), cv2.COLOR_RGB2BGR)
 
 
-def draw_boxes(img: np.ndarray, boxes: np.ndarray, scores: np.ndarray, cls_ids: np.ndarray) -> np.ndarray:
-    """Draw bounding boxes on img (BGR)."""
+def draw_boxes(
+    img: np.ndarray,
+    boxes: np.ndarray,
+    scores: np.ndarray,
+    cls_ids: np.ndarray,
+    names: dict | None = None,
+) -> np.ndarray:
+    """Draw bounding boxes on img (BGR). boxes are normalized cxcywh."""
     h, w = img.shape[:2]
     out  = img.copy()
     for (cx, cy, bw, bh), score, cls in zip(boxes, scores, cls_ids):
         x1 = int((cx - bw / 2) * w);  y1 = int((cy - bh / 2) * h)
         x2 = int((cx + bw / 2) * w);  y2 = int((cy + bh / 2) * h)
+        cls_id = int(cls)
+        label = (names.get(cls_id, str(cls_id)) if names else str(cls_id))
         cv2.rectangle(out, (x1, y1), (x2, y2), (0, 255, 0), 2)
-        cv2.putText(out, f"cls{int(cls)} {score:.2f}", (x1, max(y1 - 4, 10)),
+        cv2.putText(out, f"{label} {score:.2f}", (x1, max(y1 - 4, 10)),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 0), 1)
     return out
 
@@ -185,6 +189,21 @@ def run_inference(
     rest_model = load_restoration(restoration_ckpt, device)
     det_model  = load_detection(detection_ckpt, device, base_weights=base_yolo)
 
+    # Try to get COCO class names from the Ultralytics runner
+    _class_names: dict | None = None
+    try:
+        runner = getattr(det_model, "_yolo", None)
+        if runner is None:
+            det_model._ensure_yolo()
+            runner = getattr(det_model, "_yolo", None)
+        names_raw = getattr(getattr(runner, "model", None), "names", None)
+        if isinstance(names_raw, dict):
+            _class_names = {int(k): str(v) for k, v in names_raw.items()}
+        elif isinstance(names_raw, (list, tuple)):
+            _class_names = {i: str(n) for i, n in enumerate(names_raw)}
+    except Exception:
+        pass
+
     # Collect input files
     inp = Path(input_path)
     if inp.is_file():
@@ -225,7 +244,7 @@ def run_inference(
             boxes_arr  = preds[:, :4].cpu().numpy()  # normalized cx cy w h
             scores_arr = preds[:, 4].cpu().numpy()
             cls_arr    = preds[:, 5].cpu().numpy()
-            restored_img = draw_boxes(restored_img, boxes_arr, scores_arr, cls_arr)
+            restored_img = draw_boxes(restored_img, boxes_arr, scores_arr, cls_arr, _class_names)
 
         side_by_side = np.concatenate([weather_img, restored_img], axis=1)
 
