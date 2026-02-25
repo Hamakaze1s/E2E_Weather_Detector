@@ -106,16 +106,66 @@ def load_restoration(ckpt_path: str, device: torch.device) -> HistoformerRestora
     return model
 
 
-def load_detection(ckpt_path: str, device: torch.device):
-    """Load YOLOv8 via Ultralytics (returns a YOLO object)."""
+def load_detection(ckpt_path: str, device: torch.device, base_weights: str = "yolov8n.pt"):
+    """
+    Load the fine-tuned YOLOv8 detection model for inference.
+
+    Our training saves only the inner DetectionModel state_dict (keys like 'net.0.*').
+    This function loads the base Ultralytics architecture first, then injects
+    the fine-tuned weights on top.
+
+    Args:
+        ckpt_path:    Path to yolov8_best.pt (our fine-tuned state_dict).
+        device:       Target device.
+        base_weights: Base architecture weights (yolov8n.pt).  Can be
+                      an absolute path or a model name auto-downloaded by Ultralytics.
+    """
     try:
         from ultralytics import YOLO
     except ImportError as e:
         raise ImportError("pip install 'ultralytics>=8.3.228,<9'") from e
-    model = YOLO(ckpt_path)
-    model.to(device)
+
+    # --- Load base architecture -------------------------------------------
+    # Try to find yolov8n.pt alongside the fine-tuned checkpoint first.
+    ckpt_dir = Path(ckpt_path).parent
+
+    # Search order: same dir → parent dir → CWD → let Ultralytics download
+    candidates = [
+        ckpt_dir / "yolov8n.pt",
+        ckpt_dir.parent / "yolov8n.pt",
+        Path(base_weights),
+        Path(__file__).parent / "yolov8n.pt",
+    ]
+    base_path = next((str(c) for c in candidates if c.exists()), "yolov8n.pt")
+
+    yolo = YOLO(base_path)
+    yolo.to(device)
+    inner_net = yolo.model  # nn.Module (DetectionModel)
+
+    # --- Inject fine-tuned weights ----------------------------------------
+    raw = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+
+    # Handle the nested save format: {'model': {'model': OrderedDict, ...}, 'epoch': ...}
+    state = raw
+    for key in ("model", "model"):           # unwrap two levels if nested
+        if isinstance(state, dict) and "model" in state:
+            candidate = state["model"]
+            if isinstance(candidate, dict) and any(
+                isinstance(v, torch.Tensor) for v in candidate.values()
+            ):
+                state = candidate
+                break
+            state = candidate
+
+    # Strip 'net.' prefix that comes from YOLOv8Detector.net
+    state = {k.replace("net.", "", 1) if k.startswith("net.") else k: v
+             for k, v in state.items()}
+
+    missing, unexpected = inner_net.load_state_dict(state, strict=False)
+    if missing:
+        print(f"[!] Detection: {len(missing)} missing keys (may be normal for new heads)")
     print(f"[✓] Detection checkpoint loaded:    {ckpt_path}")
-    return model
+    return yolo
 
 
 # ── main pipeline ─────────────────────────────────────────────────────────────
@@ -129,13 +179,14 @@ def run_inference(
     conf_thres:       float = 0.25,
     iou_thres:        float = 0.45,
     device_str:       str   = "cuda",
+    base_yolo:        str   = "yolov8n.pt",
 ) -> None:
     device = torch.device(device_str if torch.cuda.is_available() else "cpu")
     print(f"[i] Running on {device}")
 
     # Load models
     rest_model = load_restoration(restoration_ckpt, device)
-    det_model  = load_detection(detection_ckpt, device)
+    det_model  = load_detection(detection_ckpt, device, base_weights=base_yolo)
 
     # Collect input files
     inp = Path(input_path)
@@ -218,6 +269,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--conf_thres", type=float, default=0.25)
     p.add_argument("--iou_thres",  type=float, default=0.45)
     p.add_argument("--device",     default="cuda")
+    p.add_argument("--base_yolo",  default="yolov8n.pt",
+                   help="Base YOLOv8 architecture weights (auto-downloaded if not found locally)")
     return p.parse_args()
 
 
@@ -232,4 +285,5 @@ if __name__ == "__main__":
         conf_thres       = args.conf_thres,
         iou_thres        = args.iou_thres,
         device_str       = args.device,
+        base_yolo        = args.base_yolo,
     )
