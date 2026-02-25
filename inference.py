@@ -140,7 +140,6 @@ def load_detection(ckpt_path: str, device: torch.device, base_weights: str = "yo
 
     yolo = YOLO(base_path)
     yolo.to(device)
-    inner_net = yolo.model  # nn.Module (DetectionModel)
 
     # --- Inject fine-tuned weights ----------------------------------------
     raw = torch.load(ckpt_path, map_location="cpu", weights_only=False)
@@ -157,11 +156,14 @@ def load_detection(ckpt_path: str, device: torch.device, base_weights: str = "yo
                 break
             state = candidate
 
-    # Strip 'net.' prefix that comes from YOLOv8Detector.net
+    # Strip 'net.' prefix that comes from YOLOv8Detector.net (= Sequential inside DetectionModel)
     state = {k.replace("net.", "", 1) if k.startswith("net.") else k: v
              for k, v in state.items()}
 
-    missing, unexpected = inner_net.load_state_dict(state, strict=False)
+    # The YOLOv8Detector stores self.net = yolo.model.model (the Sequential).
+    # Keys in our checkpoint are like "0.conv.weight", matching that Sequential.
+    target_module = getattr(yolo.model, "model", yolo.model)  # DetectionModel.model (Sequential)
+    missing, unexpected = target_module.load_state_dict(state, strict=False)
     if missing:
         print(f"[!] Detection: {len(missing)} missing keys (may be normal for new heads)")
     print(f"[✓] Detection checkpoint loaded:    {ckpt_path}")
@@ -212,7 +214,7 @@ def run_inference(
 
         # ── Step 1: Restoration (Histoformer) ─────────────────────────────
         with torch.no_grad():
-            restored = rest_model(tensor)          # (1, 3, H, W), GPU Tensor
+            restored = rest_model(tensor).clamp(0.0, 1.0)  # residual may exceed 1.0
 
         # ── Step 2: Detection (YOLOv8) ──────────────────────────────────
         # The restored tensor flows DIRECTLY into YOLOv8 — no disk save.
