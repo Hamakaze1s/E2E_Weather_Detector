@@ -109,6 +109,10 @@ def load_restoration(ckpt_path: str, device: torch.device) -> HistoformerRestora
     )
     # Strip any "restoration." prefix if saved from E2EWeatherModel
     state = {k.replace("restoration.", "", 1): v for k, v in state.items()}
+    # During training, gradient_checkpointing wraps each Sequential in
+    # _CheckpointSeq(self.seq=Sequential(...)), adding a '.seq.' level to keys.
+    # Strip it so the keys match our plain Sequential built for inference.
+    state = {k.replace(".seq.", "."): v for k, v in state.items()}
     missing, unexpected = model.load_state_dict(state, strict=False)
     if missing:
         print(f"[!] Restoration: {len(missing)} missing keys — checkpoint may not match model config")
