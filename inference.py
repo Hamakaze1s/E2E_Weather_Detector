@@ -48,16 +48,31 @@ from src.models.restoration_net import RestorationConfig, HistoformerRestoration
 SUPPORTED = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".webp"}
 
 
-def load_image(path: Path, size: int = 640) -> tuple[torch.Tensor, np.ndarray]:
-    """Read an image and return (tensor [1,3,H,W] ∈[0,1], original_bgr_ndarray)."""
+def load_image(path: Path, size: int = 640) -> tuple[torch.Tensor, np.ndarray, int, int]:
+    """Read an image and return (tensor [1,3,size,size], original_bgr, crop_h, crop_w).
+
+    Preprocessing matches training exactly:
+      LongestMaxSize(size) → PadIfNeeded(size×size, border=CONSTANT/0)
+    i.e. scale so that the longest side == size, then pad the shorter
+    dimension with zeros at the bottom / right edge.
+    crop_h / crop_w are the scaled (pre-padding) dimensions so callers can
+    strip the padding from model outputs.
+    """
     bgr = cv2.imread(str(path))
     if bgr is None:
         raise FileNotFoundError(f"Cannot read image: {path}")
     rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-    # Direct resize to square — no letterbox padding, so output has no black bars.
-    resized = cv2.resize(rgb, (size, size), interpolation=cv2.INTER_LINEAR)
-    tensor = torch.from_numpy(resized).permute(2, 0, 1).float() / 255.0
-    return tensor.unsqueeze(0), bgr
+    h, w = rgb.shape[:2]
+    scale = size / max(h, w)
+    crop_h, crop_w = int(round(h * scale)), int(round(w * scale))
+    resized = cv2.resize(rgb, (crop_w, crop_h), interpolation=cv2.INTER_LINEAR)
+    # Pad bottom / right to reach size×size (matches PadIfNeeded default)
+    padded = cv2.copyMakeBorder(
+        resized, 0, size - crop_h, 0, size - crop_w,
+        cv2.BORDER_CONSTANT, value=0,
+    )
+    tensor = torch.from_numpy(padded).permute(2, 0, 1).float() / 255.0
+    return tensor.unsqueeze(0), bgr, crop_h, crop_w
 
 
 def tensor_to_cv2(t: torch.Tensor) -> np.ndarray:
@@ -223,7 +238,7 @@ def run_inference(
 
     for img_path in files:
         print(f"  Processing: {img_path.name}")
-        tensor, orig_bgr = load_image(img_path, size=img_size)
+        tensor, orig_bgr, crop_h, crop_w = load_image(img_path, size=img_size)
         tensor = tensor.to(device)
 
         # ── Step 1: Restoration (Histoformer) ─────────────────────────────
@@ -232,16 +247,23 @@ def run_inference(
 
         # ── Step 2: Detection (YOLOv8) ──────────────────────────────────
         # The restored tensor flows DIRECTLY into YOLOv8 — no disk save.
-        # predict() returns List[(N,6)]: cx cy w h conf cls, all normalized.
+        # predict() returns List[(N,6)]: cx cy w h conf cls, normalized to img_size.
         preds_list = det_model.predict(restored, conf_thres=conf_thres, iou_thres=iou_thres)
         preds = preds_list[0]   # (N, 6) for this single image
 
         # ── Step 3: Compose side-by-side output ───────────────────────────
-        weather_img  = tensor_to_cv2(tensor)
-        restored_img = tensor_to_cv2(restored)
+        # Crop out the zero-padding added by letterbox so output matches
+        # the original aspect ratio without black bars.
+        weather_img  = tensor_to_cv2(tensor)[:crop_h, :crop_w]
+        restored_img = tensor_to_cv2(restored)[:crop_h, :crop_w]
 
         if preds.numel() > 0:
-            boxes_arr  = preds[:, :4].cpu().numpy()  # normalized cx cy w h
+            boxes_arr  = preds[:, :4].cpu().numpy().copy()
+            # Box coords are normalized to img_size×img_size; remap to crop space.
+            boxes_arr[:, 0] *= img_size / crop_w
+            boxes_arr[:, 1] *= img_size / crop_h
+            boxes_arr[:, 2] *= img_size / crop_w
+            boxes_arr[:, 3] *= img_size / crop_h
             scores_arr = preds[:, 4].cpu().numpy()
             cls_arr    = preds[:, 5].cpu().numpy()
             restored_img = draw_boxes(restored_img, boxes_arr, scores_arr, cls_arr, _class_names)
@@ -249,11 +271,10 @@ def run_inference(
         side_by_side = np.concatenate([weather_img, restored_img], axis=1)
 
         # Label the two halves
-        h = side_by_side.shape[0]
         cv2.putText(side_by_side, "Input (degraded)",
                     (10, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 220), 2)
         cv2.putText(side_by_side, "Restored + Detection (E2E)",
-                    (img_size + 10, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 200, 0), 2)
+                    (crop_w + 10, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 200, 0), 2)
 
         out_path = out_dir / f"{img_path.stem}_result.jpg"
         cv2.imwrite(str(out_path), side_by_side)
