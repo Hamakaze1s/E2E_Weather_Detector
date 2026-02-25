@@ -40,7 +40,7 @@ ROOT = Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.models.restoration_net import RestorationConfig, HistoformerRestoration
+from src.models.restoration_net import RestorationConfig, HistoformerRestoration, build_restoration_model
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -86,17 +86,17 @@ def draw_boxes(img: np.ndarray, boxes: np.ndarray, scores: np.ndarray, cls_ids: 
 # ── model loading ─────────────────────────────────────────────────────────────
 
 def load_restoration(ckpt_path: str, device: torch.device) -> HistoformerRestoration:
-    # Medium config (matches medium_32g_251225 training run)
-    cfg = RestorationConfig(
-        base_dim      = 16,
-        num_blocks    = [1, 2, 2, 2],
-        num_heads     = [1, 1, 2, 2],
-        num_refine    = 1,
-        ffn_expansion = 2.0,
-        bias          = False,
-        layernorm_type= "with_bias",
+    # Build model using the same config as training (train_medium_32g.yaml)
+    cfg_dict = dict(
+        base_dim       = 16,
+        num_blocks     = [1, 2, 2, 2],
+        num_heads      = [1, 1, 2, 2],
+        num_refine     = 1,
+        ffn_expansion  = 2.0,
+        bias           = False,
+        layernorm_type = "with_bias",
     )
-    model = HistoformerRestoration(cfg).to(device).eval()
+    model = build_restoration_model(cfg_dict).to(device).eval()
     ckpt  = torch.load(ckpt_path, map_location="cpu", weights_only=False)
     # Checkpoint is saved as {'model': OrderedDict(...), 'epoch': N}
     # Mirror the original load_state_dict_flexible: try each key with 'or' chain
