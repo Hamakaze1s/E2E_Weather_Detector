@@ -110,25 +110,16 @@ def load_detection(ckpt_path: str, device: torch.device, base_weights: str = "yo
     """
     Load the fine-tuned YOLOv8 detection model for inference.
 
-    The checkpoint was saved after BN fusion (Conv+BN → Conv with bias),
-    so we must fuse the base architecture before injecting the weights.
+    Builds a YOLOv8Detector (identical to training), fuses Conv+BN layers
+    (as done during training evaluation), then loads the full 254-key state
+    dict — all keys match with 0 missing after fusion.
 
-    Checkpoint format:
-        {'model': OrderedDict(254 keys), 'epoch': int}
-        Keys are split into two paths reflecting how YOLOv8Detector saved them:
-        ├─ 'net.<layer>.*'                       (127 fused-conv params)
-        └─ 'net._engine_model.model.<layer>.*'   (same 127 params, duplicate)
-    After fusing yolov8n and stripping 'net.', the 127 plain keys map 1-to-1.
-
-    Args:
-        ckpt_path:    Path to yolov8_best.pt checkpoint.
-        device:       Target device.
-        base_weights: Base YOLOv8n architecture weights (yolov8n.pt).
+    Checkpoint format:  {'model': OrderedDict(254 keys), 'epoch': int}
+    State dict keys split into two mirrors of the same weights:
+        'net.<layer>.*'                      (127 fused-conv params)
+        '_engine_model.model.<layer>.*'      (same 127 params, duplicate path)
     """
-    try:
-        from ultralytics import YOLO
-    except ImportError as e:
-        raise ImportError("pip install 'ultralytics>=8.3.228,<9'") from e
+    from src.models.yolov8_detector import YOLOv8Config, YOLOv8Detector
 
     # Locate base yolov8n.pt
     ckpt_dir = Path(ckpt_path).parent
@@ -140,26 +131,24 @@ def load_detection(ckpt_path: str, device: torch.device, base_weights: str = "yo
     ]
     base_path = next((str(c) for c in candidates if c.exists()), "yolov8n.pt")
 
-    yolo = YOLO(base_path)
-    yolo.to(device)
+    cfg      = YOLOv8Config(weights=base_path)
+    detector = YOLOv8Detector(cfg, device=device)
 
-    # Fuse Conv+BN layers — checkpoint was saved from a fused model
-    yolo.model.fuse()
+    # Fuse Conv+BN — the checkpoint was saved after fusion
+    if hasattr(detector, "_engine_model") and hasattr(detector._engine_model, "fuse"):
+        detector._engine_model.fuse()
 
-    # Load checkpoint and inject weights
-    raw = torch.load(ckpt_path, map_location="cpu", weights_only=False)
-    state_raw = raw["model"]  # OrderedDict(254 keys: 'net.*' with BN folded in)
+    detector.eval()
 
-    # Strip 'net.' prefix; keep only plain layer keys (drop '_engine_model.*' duplicates)
-    state = {k[4:]: v for k, v in state_raw.items()
-             if k.startswith("net.") and not k.startswith("net._")}
-
-    target = yolo.model.model  # fused Sequential
-    missing, unexpected = target.load_state_dict(state, strict=False)
+    # Load full state dict: after fusion both 'net.*' and '_engine_model.model.*'
+    # map to the same fused Sequential → 0 missing keys
+    raw   = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+    state = raw["model"]
+    missing, unexpected = detector.load_state_dict(state, strict=False)
     if missing:
         print(f"[!] Detection: {len(missing)} missing keys")
     print(f"[✓] Detection checkpoint loaded:    {ckpt_path}")
-    return yolo
+    return detector
 
 
 # ── main pipeline ─────────────────────────────────────────────────────────────
@@ -210,21 +199,19 @@ def run_inference(
 
         # ── Step 2: Detection (YOLOv8) ──────────────────────────────────
         # The restored tensor flows DIRECTLY into YOLOv8 — no disk save.
-        results = det_model.predict(
-            restored,
-            conf=conf_thres, iou=iou_thres, verbose=False, imgsz=img_size
-        )
+        # predict() returns List[(N,6)]: cx cy w h conf cls, all normalized.
+        preds_list = det_model.predict(restored, conf_thres=conf_thres, iou_thres=iou_thres)
+        preds = preds_list[0]   # (N, 6) for this single image
 
         # ── Step 3: Compose side-by-side output ───────────────────────────
         weather_img  = tensor_to_cv2(tensor)
         restored_img = tensor_to_cv2(restored)
 
-        r = results[0]
-        if r.boxes is not None and len(r.boxes):
-            boxes   = r.boxes.xywhn.cpu().numpy()
-            scores  = r.boxes.conf.cpu().numpy()
-            cls_ids = r.boxes.cls.cpu().numpy()
-            restored_img = draw_boxes(restored_img, boxes, scores, cls_ids)
+        if preds.numel() > 0:
+            boxes_arr  = preds[:, :4].cpu().numpy()  # normalized cx cy w h
+            scores_arr = preds[:, 4].cpu().numpy()
+            cls_arr    = preds[:, 5].cpu().numpy()
+            restored_img = draw_boxes(restored_img, boxes_arr, scores_arr, cls_arr)
 
         side_by_side = np.concatenate([weather_img, restored_img], axis=1)
 
