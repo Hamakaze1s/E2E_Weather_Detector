@@ -110,17 +110,25 @@ def load_detection(ckpt_path: str, device: torch.device, base_weights: str = "yo
     """
     Load the fine-tuned YOLOv8 detection model for inference.
 
-    Training saved the entire YOLOv8Detector.state_dict() (keys 'net.*' and
-    '_engine_model.*').  We reconstruct an identical YOLOv8Detector and call
-    load_state_dict() directly — the keys match without any remapping.
+    The checkpoint was saved after BN fusion (Conv+BN → Conv with bias),
+    so we must fuse the base architecture before injecting the weights.
+
+    Checkpoint format:
+        {'model': OrderedDict(254 keys), 'epoch': int}
+        Keys are split into two paths reflecting how YOLOv8Detector saved them:
+        ├─ 'net.<layer>.*'                       (127 fused-conv params)
+        └─ 'net._engine_model.model.<layer>.*'   (same 127 params, duplicate)
+    After fusing yolov8n and stripping 'net.', the 127 plain keys map 1-to-1.
 
     Args:
-        ckpt_path:    Path to yolov8_best.pt (saved via YOLOv8Detector.state_dict()).
+        ckpt_path:    Path to yolov8_best.pt checkpoint.
         device:       Target device.
-        base_weights: Base YOLOv8n architecture weights. Searched in several
-                      locations before falling back to Ultralytics auto-download.
+        base_weights: Base YOLOv8n architecture weights (yolov8n.pt).
     """
-    from src.models.yolov8_detector import YOLOv8Config, YOLOv8Detector
+    try:
+        from ultralytics import YOLO
+    except ImportError as e:
+        raise ImportError("pip install 'ultralytics>=8.3.228,<9'") from e
 
     # Locate base yolov8n.pt
     ckpt_dir = Path(ckpt_path).parent
@@ -132,22 +140,26 @@ def load_detection(ckpt_path: str, device: torch.device, base_weights: str = "yo
     ]
     base_path = next((str(c) for c in candidates if c.exists()), "yolov8n.pt")
 
-    # Build a fresh YOLOv8Detector — identical structure to what was trained
-    cfg      = YOLOv8Config(weights=base_path)
-    detector = YOLOv8Detector(cfg, device=device)
-    detector.eval()
+    yolo = YOLO(base_path)
+    yolo.to(device)
 
-    # Load the fine-tuned state dict directly (checkpoint was saved as
-    # YOLOv8Detector.state_dict(), so keys match perfectly)
-    raw   = torch.load(ckpt_path, map_location="cpu", weights_only=False)
-    state = raw["model"]          # OrderedDict with 'net.*' / '_engine_model.*' keys
-    missing, unexpected = detector.load_state_dict(state, strict=False)
+    # Fuse Conv+BN layers — checkpoint was saved from a fused model
+    yolo.model.fuse()
+
+    # Load checkpoint and inject weights
+    raw = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+    state_raw = raw["model"]  # OrderedDict(254 keys: 'net.*' with BN folded in)
+
+    # Strip 'net.' prefix; keep only plain layer keys (drop '_engine_model.*' duplicates)
+    state = {k[4:]: v for k, v in state_raw.items()
+             if k.startswith("net.") and not k.startswith("net._")}
+
+    target = yolo.model.model  # fused Sequential
+    missing, unexpected = target.load_state_dict(state, strict=False)
     if missing:
         print(f"[!] Detection: {len(missing)} missing keys")
-    if unexpected:
-        print(f"[!] Detection: {len(unexpected)} unexpected keys")
     print(f"[✓] Detection checkpoint loaded:    {ckpt_path}")
-    return detector
+    return yolo
 
 
 # ── main pipeline ─────────────────────────────────────────────────────────────
