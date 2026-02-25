@@ -112,10 +112,8 @@ pip install -r requirements.txt
 
 | File | Size | Description | Link |
 |------|------|-------------|------|
-| `restoration_best.pt` | 4.5 MB | Histoformer restoration weights (`medium_32g_251225` run) | [Google Drive ↗](#) |
-| `yolov8_best.pt` | 12.1 MB | Fine-tuned YOLOv8n detection weights | [Google Drive ↗](#) |
-
-> **Note:** Replace `[Google Drive ↗](#)` with real share links after uploading the files.
+| `restoration_best.pt` | 4.5 MB | Histoformer restoration weights (`medium_32g_251225` run) | [Google Drive ↗](https://drive.google.com/file/d/1Z3asVfs9c5vTaCyb1maFApPRrXwSQecw/view?usp=sharing) |
+| `yolov8_best.pt` | 12.1 MB | Fine-tuned YOLOv8n detection weights | [Google Drive ↗](https://drive.google.com/file/d/1h7nvtztmhn7CxQZyD1ViQg3MSyRizr5x/view?usp=drive_link) |
 
 Place the downloaded files in `checkpoints/`:
 ```
@@ -132,13 +130,13 @@ wget https://github.com/ultralytics/assets/releases/download/v8.2.0/yolov8n.pt
 
 ### 3. Sample images
 
-Three sample images (rain / fog / snow scenes from the DAWN dataset) are already included in [`sample_images/`](sample_images/):
+Three sample images are already included in [`sample_images/`](sample_images/):
 
 | File | Scene |
 |------|-------|
-| `b1c66a42-6f7d68ca.jpg` | Rain |
-| `b1c81faa-c80764c5.jpg` | Fog |
-| `b1cd1e94-26dd524f.jpg` | Snow |
+| `b1c66a42-6f7d68ca.jpg` | Fog |
+| `b1cd1e94-26dd524f.jpg` | Rain |
+| `b1d10d08-da110fcb.jpg` | Snow |
 
 You can replace or add your own images. Supported formats: `.jpg`, `.png`, `.bmp`, `.tiff`, `.webp`
 
@@ -160,9 +158,9 @@ Each output file (`output/<name>_result.jpg`) shows a **side-by-side** compariso
 
 **Example outputs** (from the included sample images):
 
-![b1c66a42 result](output/b1c66a42-6f7d68ca_result.jpg)
-![b1c81faa result](output/b1c81faa-c80764c5_result.jpg)
-![b1cd1e94 result](output/b1cd1e94-26dd524f_result.jpg)
+![fog result](output/b1c66a42-6f7d68ca_result.jpg)
+![rain result](output/b1cd1e94-26dd524f_result.jpg)
+![snow result](output/b1d10d08-da110fcb_result.jpg)
 
 ---
 
