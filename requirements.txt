@@ -1,0 +1,27 @@
+# Core deep learning stack
+# Pinned for RTX 50xx (sm_120) support via cu128 CUDA wheels.
+# For older GPUs (RTX 30/40xx), use the standard cu118/cu121 index.
+torch==2.9.0
+torchvision==0.24.0
+
+# Detection backend
+ultralytics>=8.3.228,<9
+
+# Vision / image processing
+opencv-python>=4.8
+Pillow>=10.0
+scikit-image>=0.22
+albumentations>=1.4.0
+
+# Tensor utilities
+einops>=0.7
+numpy>=1.24
+scipy>=1.11
+
+# Config & logging
+pyyaml>=6.0
+tqdm>=4.66
+tensorboard>=2.12
+
+# Visualization (for figure generation scripts)
+matplotlib>=3.8
