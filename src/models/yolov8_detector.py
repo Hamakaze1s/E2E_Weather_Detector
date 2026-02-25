@@ -65,12 +65,19 @@ class YOLOv8Detector(nn.Module):
         return self.net(x)
 
     @torch.no_grad()
-    def predict(self, x: torch.Tensor, conf_thres: Optional[float] = None, iou_thres: Optional[float] = None):
-        """Run inference and return Ultralytics Results objects."""
+    def predict(self, x: torch.Tensor, conf_thres: Optional[float] = None,
+                iou_thres: Optional[float] = None, **kwargs):
+        """Run inference and return Ultralytics Results objects.
+
+        Extra keyword arguments (e.g. conf, iou, imgsz, verbose) are forwarded
+        directly to the underlying Ultralytics YOLO.predict() call so callers
+        can use either the training-style API or the Ultralytics API.
+        """
         self._ensure_yolo()
-        conf = conf_thres or self.cfg.conf_thres
-        iou  = iou_thres  or self.cfg.iou_thres
-        return self._yolo.predict(x, conf=conf, iou=iou, verbose=False)
+        conf = kwargs.pop("conf", None) or conf_thres or self.cfg.conf_thres
+        iou  = kwargs.pop("iou",  None) or iou_thres  or self.cfg.iou_thres
+        kwargs.setdefault("verbose", False)
+        return self._yolo.predict(x, conf=conf, iou=iou, **kwargs)
 
     def _ensure_yolo(self) -> None:
         if self._yolo is None:

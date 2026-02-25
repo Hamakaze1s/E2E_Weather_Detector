@@ -110,26 +110,20 @@ def load_detection(ckpt_path: str, device: torch.device, base_weights: str = "yo
     """
     Load the fine-tuned YOLOv8 detection model for inference.
 
-    Our training saves only the inner DetectionModel state_dict (keys like 'net.0.*').
-    This function loads the base Ultralytics architecture first, then injects
-    the fine-tuned weights on top.
+    Training saved the entire YOLOv8Detector.state_dict() (keys 'net.*' and
+    '_engine_model.*').  We reconstruct an identical YOLOv8Detector and call
+    load_state_dict() directly — the keys match without any remapping.
 
     Args:
-        ckpt_path:    Path to yolov8_best.pt (our fine-tuned state_dict).
+        ckpt_path:    Path to yolov8_best.pt (saved via YOLOv8Detector.state_dict()).
         device:       Target device.
-        base_weights: Base architecture weights (yolov8n.pt).  Can be
-                      an absolute path or a model name auto-downloaded by Ultralytics.
+        base_weights: Base YOLOv8n architecture weights. Searched in several
+                      locations before falling back to Ultralytics auto-download.
     """
-    try:
-        from ultralytics import YOLO
-    except ImportError as e:
-        raise ImportError("pip install 'ultralytics>=8.3.228,<9'") from e
+    from src.models.yolov8_detector import YOLOv8Config, YOLOv8Detector
 
-    # --- Load base architecture -------------------------------------------
-    # Try to find yolov8n.pt alongside the fine-tuned checkpoint first.
+    # Locate base yolov8n.pt
     ckpt_dir = Path(ckpt_path).parent
-
-    # Search order: same dir → parent dir → CWD → let Ultralytics download
     candidates = [
         ckpt_dir / "yolov8n.pt",
         ckpt_dir.parent / "yolov8n.pt",
@@ -138,36 +132,22 @@ def load_detection(ckpt_path: str, device: torch.device, base_weights: str = "yo
     ]
     base_path = next((str(c) for c in candidates if c.exists()), "yolov8n.pt")
 
-    yolo = YOLO(base_path)
-    yolo.to(device)
+    # Build a fresh YOLOv8Detector — identical structure to what was trained
+    cfg      = YOLOv8Config(weights=base_path)
+    detector = YOLOv8Detector(cfg, device=device)
+    detector.eval()
 
-    # --- Inject fine-tuned weights ----------------------------------------
-    raw = torch.load(ckpt_path, map_location="cpu", weights_only=False)
-
-    # Handle the nested save format: {'model': {'model': OrderedDict, ...}, 'epoch': ...}
-    state = raw
-    for key in ("model", "model"):           # unwrap two levels if nested
-        if isinstance(state, dict) and "model" in state:
-            candidate = state["model"]
-            if isinstance(candidate, dict) and any(
-                isinstance(v, torch.Tensor) for v in candidate.values()
-            ):
-                state = candidate
-                break
-            state = candidate
-
-    # Strip 'net.' prefix that comes from YOLOv8Detector.net (= Sequential inside DetectionModel)
-    state = {k.replace("net.", "", 1) if k.startswith("net.") else k: v
-             for k, v in state.items()}
-
-    # The YOLOv8Detector stores self.net = yolo.model.model (the Sequential).
-    # Keys in our checkpoint are like "0.conv.weight", matching that Sequential.
-    target_module = getattr(yolo.model, "model", yolo.model)  # DetectionModel.model (Sequential)
-    missing, unexpected = target_module.load_state_dict(state, strict=False)
+    # Load the fine-tuned state dict directly (checkpoint was saved as
+    # YOLOv8Detector.state_dict(), so keys match perfectly)
+    raw   = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+    state = raw["model"]          # OrderedDict with 'net.*' / '_engine_model.*' keys
+    missing, unexpected = detector.load_state_dict(state, strict=False)
     if missing:
-        print(f"[!] Detection: {len(missing)} missing keys (may be normal for new heads)")
+        print(f"[!] Detection: {len(missing)} missing keys")
+    if unexpected:
+        print(f"[!] Detection: {len(unexpected)} unexpected keys")
     print(f"[✓] Detection checkpoint loaded:    {ckpt_path}")
-    return yolo
+    return detector
 
 
 # ── main pipeline ─────────────────────────────────────────────────────────────
