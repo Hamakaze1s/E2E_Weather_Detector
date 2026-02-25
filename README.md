@@ -103,19 +103,19 @@ See [`src/training/losses.py`](src/training/losses.py) for the full implementati
 ### 1. Clone & install
 
 ```bash
-git clone https://github.com/<your-username>/E2E_Weather_Detector.git
+git clone https://github.com/Hamakaze1s/E2E_Weather_Detector.git
 cd E2E_Weather_Detector
 pip install -r requirements.txt
 ```
 
 ### 2. Download checkpoints
 
-| File | Description | Link |
-|------|-------------|------|
-| `restoration_best.pt` | Histoformer restoration weight | [Google Drive ↗](#) |
-| `yolov8_best.pt` | Fine-tuned YOLOv8 detection weight | [Google Drive ↗](#) |
+| File | Size | Description | Link |
+|------|------|-------------|------|
+| `restoration_best.pt` | 4.5 MB | Histoformer restoration weights (`medium_32g_251225` run) | [Google Drive ↗](#) |
+| `yolov8_best.pt` | 12.1 MB | Fine-tuned YOLOv8n detection weights | [Google Drive ↗](#) |
 
-> **TODO for the repository owner:** upload `checkpoints/medium_32g_251225/restoration_best.pt` and `yolov8_best.pt` to Google Drive and replace `[Google Drive ↗](#)` with the real share links.
+> **Note:** Replace `[Google Drive ↗](#)` with real share links after uploading the files.
 
 Place the downloaded files in `checkpoints/`:
 ```
@@ -124,10 +124,23 @@ checkpoints/
   yolov8_best.pt
 ```
 
-### 3. Add sample images
+You also need the base YOLOv8n weights (used to build the detection model before loading fine-tuned weights):
+```bash
+# Ultralytics downloads it automatically, or download manually:
+wget https://github.com/ultralytics/assets/releases/download/v8.2.0/yolov8n.pt
+```
 
-Place 3–5 adverse-weather images in `sample_images/` (see [`sample_images/README.md`](sample_images/README.md)).  
-Supported formats: `.jpg`, `.png`, `.bmp`, `.tiff`, `.webp`
+### 3. Sample images
+
+Three sample images (rain / fog / snow scenes from the DAWN dataset) are already included in [`sample_images/`](sample_images/):
+
+| File | Scene |
+|------|-------|
+| `b1c66a42-6f7d68ca.jpg` | Rain |
+| `b1c81faa-c80764c5.jpg` | Fog |
+| `b1cd1e94-26dd524f.jpg` | Snow |
+
+You can replace or add your own images. Supported formats: `.jpg`, `.png`, `.bmp`, `.tiff`, `.webp`
 
 ### 4. Run inference
 
@@ -144,6 +157,12 @@ Each output file (`output/<name>_result.jpg`) shows a **side-by-side** compariso
 | Left half | Right half |
 |-----------|------------|
 | Degraded input (as-is) | Restored + YOLOv8 detections |
+
+**Example outputs** (from the included sample images):
+
+![b1c66a42 result](output/b1c66a42-6f7d68ca_result.jpg)
+![b1c81faa result](output/b1c81faa-c80764c5_result.jpg)
+![b1cd1e94 result](output/b1cd1e94-26dd524f_result.jpg)
 
 ---
 
@@ -193,7 +212,7 @@ If you use this work, please cite:
 @misc{e2e_weather_detector_2025,
   title   = {End-to-End Adverse Weather Detector with Joint Restoration and Detection},
   year    = {2025},
-  url     = {https://github.com/<your-username>/E2E_Weather_Detector}
+  url     = {https://github.com/Hamakaze1s/E2E_Weather_Detector}
 }
 ```
 
